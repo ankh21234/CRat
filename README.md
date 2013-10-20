@@ -1,7 +1,5 @@
 #CRAT - Remote Admin Tool
 
-==================
-
 ###¿Qué es?
 **C-Rat** es una herramienta cuya finalidad consiste en habilitar a un administrador a manejar/interactuar de forma cómoda y rápida los equipos de la red en la que se encuentra o de forma totalmente remota a través de internet, permitiendole obtener información o ejecutar acciones concretas en los equipos.
 
