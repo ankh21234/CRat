@@ -1,0 +1,204 @@
+
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Cliente.Negocio;
+using Common;
+using Common.Lib;
+
+
+
+namespace Cliente.Servicio
+{
+    class Program
+    {
+        private const string IpServidor = "127.0.0.1";
+        private const int PuertoServidor = 40000;
+        private const int TiempoEsperaReconexion = 1000; //en ms.
+        private static TcpClient _client;
+        private static IPEndPoint point = new IPEndPoint(IPAddress.Parse(IpServidor), PuertoServidor);
+        private static NegocioCliente servicio = new NegocioCliente();
+
+        /*Parametros del Cliente*/
+        private static Boolean TienePassword = false;
+        
+
+        /**/
+        private static String passwordDelCliente = "hola123";
+        private static String passwordRecibida = "";
+
+        private static void Main()
+        {
+            mostrarDependendias();
+            Console.Out.WriteLine("Cliente--");
+            InitCommonControls();    
+            if(TienePassword)
+                servicio.MostrarMsgBox("La password asociada a este cliente es: \n\n"+passwordDelCliente,"Password!",32);
+            Conectar();
+            Process.GetCurrentProcess().WaitForExit();
+        }
+
+
+        private static void Conectar()
+        {
+            try
+            {
+                _client = new TcpClient();
+                
+                Console.Out.WriteLine("Intentando conectar con "+point.Address+":"+point.Port);
+                
+                IAsyncResult resultadoConexion =  _client.BeginConnect(point.Address,point.Port,null,null);
+                bool success = resultadoConexion.AsyncWaitHandle.WaitOne(TiempoEsperaReconexion, true);
+
+                if (!success)
+                {
+                    //lanzo la excepcion y cierro el socket al capturarla, para volver a intentarlo.                  
+                    throw new ApplicationException("Fallo al conectar con el servidor.");
+                }                  
+                //genero un netData con la informacion del sistema.
+                Console.Out.WriteLine("Conectado!");
+                int protocol = (int) Protocolo.Cliente.Conectado;
+                NetData d = servicio.GenerarInformacionDelSistema(protocol);
+                Enviar(d);
+                
+                _client.GetStream().BeginRead(new byte[] {0}, 0, 0, Leer, null);
+            }
+            catch (Exception)
+            {
+                CerrarConexiones();
+                Conectar();
+            }
+        }
+
+        private static void Leer(IAsyncResult ar)
+        {
+            try
+            {
+                byte[] datosLeidos = new byte[32768];
+                int bytesLeidos = _client.GetStream().Read(datosLeidos, 0, datosLeidos.Length);
+                byte[] datosObj = new byte[bytesLeidos];
+                for (int i = 0; i < bytesLeidos; i++)
+                {
+                    datosObj[i] = datosLeidos[i];
+                }
+
+                Procesar((NetData) Serializador.Deserializar(datosObj));
+                _client.GetStream().BeginRead(new byte[] {0}, 0, 0, Leer, null);
+            }
+            catch
+            {
+                Thread.Sleep(TiempoEsperaReconexion);
+                CerrarConexiones();
+                Conectar();
+            }
+        }
+
+        private static void Procesar(NetData objRecibido)
+        {
+            Console.Out.WriteLine("Recibido msg con codigo de protocolo ["+objRecibido.CodigoDeProtocolo+"]");
+            /*mientras  el acceso no este validado...*/
+            if(comprobarAuth() == false)
+            {
+                Enviar(servicio.GenerarPeticionPassword());
+                Boolean auth = false;
+                /*Si el objeto recibido es una respuesta a la password la valido, si no paso.*/
+                if(objRecibido.CodigoDeProtocolo == (int)Protocolo.Servidor.EnviarPassword)
+                    auth = validarRespuestaPassword(objRecibido);
+                else                
+                    return;                
+                /*Si no estoy validado no hago nada... sigo leyendo hasta estarlo.*/
+                if (auth == false)
+                    return;
+            }
+            //Si el server esta autorizado proceso los msg recibidos. 
+
+            switch (objRecibido.CodigoDeProtocolo)
+            {
+                case 40: //pedir info software
+                      NetData d = servicio.GenerarInfoVentanasVisibles(50);
+                      Enviar(d);
+                      break;
+                case 33: //minimizar Ventana
+                    IntPtr handle = new IntPtr(int.Parse(objRecibido.GetDato("Handle")));
+                    servicio.MinimizarVentana(handle);
+                    break;
+
+
+            }
+
+
+
+        }
+
+        private static void Enviar(NetData obj)
+        {
+            byte[] datos = Serializador.Serializar(obj);
+            _client.GetStream().Write(datos, 0, datos.Length);
+            _client.GetStream().Flush();
+            Console.Out.WriteLine("Envio datos al servidor {0}:{1}", point.Address.ToString(), point.Port);
+        }
+
+        private static void CerrarConexiones()
+        {
+            try
+            {
+                _client.Close();
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+
+        private static Boolean comprobarAuth()
+        {
+            /*Si no tiene password la autorizacion siempre es correcta.*/
+            if (!TienePassword)
+                return true;
+            
+            return passwordDelCliente == passwordRecibida;
+        }
+
+        private static Boolean validarRespuestaPassword(NetData datosRecibidos)
+        {
+            String psw = datosRecibidos.GetDato("Password");
+            if (psw == passwordDelCliente)
+            {
+                passwordRecibida = psw;
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Muestra en consola las referencias a las Dll(tanto propias como del Framework .NET) que necesita el cliente para funcionar
+        /// correctamente el cliente.
+        /// </summary>
+        private static void mostrarDependendias()
+        {
+            var assemblies = AppDomain.CurrentDomain
+                            .GetAssemblies()
+                            .Where(a => !a.IsDynamic)
+                            .Select(a => a.Location);
+
+            foreach (var asam in assemblies.ToArray())
+            {
+                Console.Out.WriteLine(""+asam);                
+            }
+
+        }
+        [DllImport("Comctl32.dll")]
+        private static extern void InitCommonControls();
+    }
+
+
+    
+}
